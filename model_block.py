@@ -53,8 +53,17 @@ class CREStereoBLock:
             self.disposed = True
 
     def _conv_image(self,img):
-        eval_w, eval_h = self.inference_size[:2]
-        img = cv2.resize(img, (eval_w, eval_h), interpolation=cv2.INTER_LINEAR)
+        
+        if self.inference_size is None:
+            h,w = img.shape[:2]
+            pad_ht = (((h // 32) + 1) * 32 - h) % 32
+            pad_wd = (((w // 32) + 1) * 32 - w) % 32
+            _pad = [pad_wd//2, pad_wd - pad_wd//2, pad_ht//2, pad_ht - pad_ht//2]
+            img = cv2.copyMakeBorder(img, _pad[2], _pad[3], _pad[0], _pad[1], cv2.BORDER_REPLICATE)
+        else:
+            eval_w, eval_h = self.inference_size[:2]
+            img = cv2.resize(img, (eval_w, eval_h), interpolation=cv2.INTER_LINEAR)
+            _pad = None
 
         if len(img.shape) < 3:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
@@ -72,15 +81,17 @@ class CREStereoBLock:
                 align_corners=True,
             )
 
-        return img, img_dw2
+        return img, img_dw2, _pad
 
     
     def test(self, left_vpp, right_vpp):
         #Input conversion
         in_h, in_w = left_vpp.shape[:2]
-        eval_w, eval_h = self.inference_size[:2]
-        left_vpp, left_vpp_dw2 = self._conv_image(left_vpp)
-        right_vpp, right_vpp_dw2 = self._conv_image(right_vpp)
+        
+        
+
+        left_vpp, left_vpp_dw2, _pad = self._conv_image(left_vpp)
+        right_vpp, right_vpp_dw2,_ = self._conv_image(right_vpp)
 
         with torch.no_grad():
             pred_flow_dw2 = self.model(left_vpp_dw2, right_vpp_dw2, iters=self.n_iter, flow_init=None)
@@ -88,8 +99,14 @@ class CREStereoBLock:
         
         pred_disp = torch.squeeze(pred_flow[:, 0, :, :]).cpu().detach().numpy()
 
-        t = float(in_w) / float(eval_w)
-        disp = cv2.resize(pred_disp, (in_w, in_h), interpolation=cv2.INTER_LINEAR) * t
+        if self.inference_size is None:
+            ht, wd = pred_disp.shape[-2:]
+            c = [_pad[2], ht-_pad[3], _pad[0], wd-_pad[1]]
+            disp = pred_disp[..., c[0]:c[1], c[2]:c[3]]
+        else:
+            eval_w = self.inference_size[0]
+            t = float(in_w) / float(eval_w)
+            disp = cv2.resize(pred_disp, (in_w, in_h), interpolation=cv2.INTER_LINEAR) * t
 
         return disp
             
